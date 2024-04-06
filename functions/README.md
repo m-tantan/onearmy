@@ -1,5 +1,13 @@
 # Firebase Functions
 
+**Update 2021-08-11**
+
+This documentation likely requires updating, and the information provided may no longer be fully valid. Please feel free to create a new issue for any specific items identified as conflict/confusing or possibly no longer valid.
+
+Some additional, newer information can also be found in [Firebase Emulators Docs](../packages/documentation/docs/Backend%20Development/firebase-emulators.md)
+
+---
+
 ## What are they?
 
 Firebase functions are backend functions, triggered either via https requests, cloud pub/sub or other specific Firebase events (e.g. database/storage writes). They run within a nodejs environment and have full ability to interact with the firebase platform.
@@ -24,17 +32,26 @@ Simply make a PR and once approved the function will be deployed
 
 ## Testing locally
 
-If the code is built you can run firebase serve from the main repo and the functions will also be made available. More info: https://firebase.google.com/docs/functions/local-emulator
+```
+cd functions
+npm run start
+```
 
-Note, this will require authentication for the firebase project. You can request to be added to the project from any of the admins.
+This spins up concurrent tasks to build and watch for changes to the typescript code, and run
+the firebase emulator which will hot-reload when the compiled code changes. This combination
+should mean that changes to functions can be tested locally, via the given endpoint, e.g.  
+`http://localhost:5001/precious-plastics-v4-dev/us-central1/api`
+More info: https://firebase.google.com/docs/functions/local-emulator
 
-This also only works for specific triggers (namely the api endpoints). If you want to
-test a functions triggered in other ways you may first want to create an api endpoint
-for testing and later test further with the [firebase functions shell](https://firebase.google.com/docs/functions/local-emulator#install_and_configure_the_cloud_functions_shell), via command `$npm run shell`
+It is recommended that you use a good API testing software, such as [Postman](https://www.getpostman.com/) or [Insomnia](https://insomnia.rest/) for this
 
-Additionally, the functions won't be automatically reloaded on change. This should be possible
-(easier when working with JS instead of TS), so if anybody wishes to investigate further they would
-be most welcome. Alternatively just restart the serve process on changes.
+Note, this will require authentication for the firebase project. You can request to be added to the project from any of the admins. Once authenticated, you can login to firebase within your own console
+and the relevant config will automatically be made available
+(viewable with command `firebase functions:config:get`)
+
+This also only works for specific triggers (namely the https callable functions, api endpoints). For more information see https://firebase.google.com/docs/functions/local-emulator.
+
+NOTE - if running a function that requires access to the live database (and not just emulated), use `npm run serve:only:functions`, which will exclude db emulator and default to live project db
 
 ## Handling headers and redirects
 
@@ -59,6 +76,36 @@ To view console logs and events from deployed functions request project access f
 
 ## Adding cron tasks
 
-Both production and live have small app-engine instances that run cron tasks, schedules can be seen in ../functions-cron.
+Firebase supports adding functions that can be triggered periodically (e.g. daily, weekly) using cloud pubsub and scheduled functions. See examples in [./src/scheduled/tasks.ts](./src/scheduled/tasks.ts)
 
-If changing either of these remember to deploy both to production and development servers
+# Using functions for data migrations
+
+If making changes across the entire DB it is likely that backend functions will be used to do so.
+A couple tips to help implementing:
+
+1. Create backups of all the collection points potentially affected.
+   (note, you will need admin access to the project, and initialise using gcloud. Confirm access via `gcloud config list` and select project via `gcloud init`)
+
+```
+gcloud firestore export gs://[BUCKET_NAME] --collection-ids=[COLLECTION_ID_1],[COLLECTION_ID_2]
+```
+
+E.g. for the staging server, updating howtos:
+
+```
+gcloud firestore export gs://precious-plastics-v4-dev-exports/2020-10-12 --collection-ids=v3_howtos
+```
+
+Or production
+
+```
+gcloud firestore export gs://onearmyworld-exports/2020-10-12_manual_backup --collection-ids=v3_howtos,v3_mappings,v3_tags,v3_users
+```
+
+(note - whilst the full database can be backed up without specifying collection ids, this makes it harder to re-import a single collection)
+For more info see https://firebase.google.com/docs/firestore/manage-data/export-import#export_specific_collections
+
+1. For any data that you want to be reflected immediately, also change the `modified` field so that user caches will update as required
+
+2. If less confident or making large scale changes, consider populating to a new db endpoint, e.g. `v4_howtos`
+   (this will need to also be updated in the models for both functions and frontend)

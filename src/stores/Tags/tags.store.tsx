@@ -1,53 +1,34 @@
-import { observable, action } from 'mobx'
-import { afs } from 'src/utils/firebase'
-import { TAGS_MOCK } from 'src/mocks/tags.mock'
-import { ITag, TagCategory } from 'src/models/tags.model'
+import { action, makeObservable, observable } from 'mobx'
 import { arrayToJson } from 'src/utils/helpers'
+
 import { ModuleStore } from '../common/module.store'
 
+import type { ITag } from 'src/models/tags.model'
+import type { IRootStore } from '../RootStore'
+
 export class TagsStore extends ModuleStore {
-  activeCategory?: TagCategory
   @observable
   public allTags: ITag[] = []
   @observable
   public allTagsByKey: { [key: string]: ITag } = {}
-  @observable
-  public categoryTags: ITag[] = []
-  @action public setTagsCategory(category?: TagCategory) {
-    this.activeCategory = category
-    this._filterTags()
-  }
 
-  constructor() {
-    super('tagsV1')
+  constructor(rootStore: IRootStore) {
+    super(rootStore, 'tags')
+    // call init immediately for tags so they are available to all pages
+    super.init()
+    makeObservable(this)
     this.allDocs$.subscribe((docs: ITag[]) => {
-      // convert firestore timestamp back to date objects and sort
-      this.allTags = docs.sort((a, b) => (a.label > b.label ? 1 : -1))
-      this.allTagsByKey = arrayToJson(docs, '_id')
-      this._filterTags()
+      this.setAllTags(docs)
     })
   }
 
-  private _filterTags() {
-    let tags = [...this.allTags]
-    if (this.activeCategory) {
-      tags = tags.filter(tag =>
-        tag.categories.includes(this.activeCategory as TagCategory),
-      )
-    }
-    this.categoryTags = [...tags]
+  @action
+  private setAllTags(docs: ITag[]) {
+    this.allTags = docs.sort((a, b) => (a.label > b.label ? 1 : -1))
+    this.allTagsByKey = arrayToJson(docs, '_id')
   }
 
-  // sometimes during testing we might want to put the mock data in the database
-  // currently called from super-admin page
-  uploadTagsMockToDatabase() {
-    const batch = afs.batch()
-    TAGS_MOCK.forEach(tag => {
-      if (tag._id) {
-        const ref = afs.doc(`tagsV1/${tag._id}`)
-        batch.set(ref, tag)
-      }
-    })
-    return batch.commit()
+  public saveTag(tag: Partial<ITag>) {
+    return this.db.collection('tags').doc(tag._id).set(tag)
   }
 }

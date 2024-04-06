@@ -1,90 +1,116 @@
-/* tslint:disable:no-eval */
-import * as React from 'react'
-import { Switch, Route, BrowserRouter, Redirect } from 'react-router-dom'
-import DevTools from 'mobx-react-devtools'
-import { NotFoundPage } from './NotFound/NotFound'
-import ScrollToTop from './../components/ScrollToTop/ScrollToTop'
+import React, { Suspense } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { Button, ExternalLink } from 'oa-components'
+import { Alerts } from 'src/common/Alerts/Alerts'
+import { Analytics } from 'src/common/Analytics'
+import { getSupportedModules, isModuleSupported, MODULE } from 'src/modules'
+import DevSiteHeader from 'src/pages/common/DevSiteHeader/DevSiteHeader'
+import Main from 'src/pages/common/Layout/Main'
+import { SeoTagsUpdateComponent } from 'src/utils/seo'
+import { Box, Flex } from 'theme-ui'
+
+import { ScrollToTop } from '../common/ScrollToTop'
+import GlobalSiteFooter from './common/GlobalSiteFooter/GlobalSiteFooter'
 import Header from './common/Header/Header'
-import { SITE } from 'src/config/config'
-import { DevNotice } from 'src/components/Dev/DevNotice'
-import PageContainer from 'src/components/Layout/PageContainer'
+import { NotFoundPage } from './NotFound/NotFound'
 import {
-  COMMUNITY_PAGES,
   COMMUNITY_PAGES_PROFILE,
-  COMMUNITY_PAGES_MORE,
-  ADMIN_PAGES,
+  getAvailablePageList,
+  NO_HEADER_PAGES,
+  POLICY_PAGES,
 } from './PageList'
+import { QuestionModuleContainer } from './Question'
 
-interface IState {
-  singlePageMode: boolean
-  displayPageComponent?: any
-}
+export const Pages = () => {
+  //   any,
+  //   {
+  //     singlePageMode: boolean
+  //     displayPageComponent?: any
+  //     supportedRoutes?: IPageMeta[]
+  //   }
+  // > {
+  // we are rendering different pages and navigation dependent on whether the user has navigated directly to view the
+  // entire site, or just one page of it via subdomains. This is so we can effectively integrate just parts of this
+  // platform into other sites. The first case is direct nav
+  const menuItems = [
+    ...getAvailablePageList(getSupportedModules()),
+    ...COMMUNITY_PAGES_PROFILE,
+    ...NO_HEADER_PAGES,
+    ...POLICY_PAGES,
+  ]
 
-export class Routes extends React.Component<any, IState> {
-  constructor(props: any) {
-    super(props)
-  }
+  return (
+    <Flex
+      sx={{ height: '100vh', flexDirection: 'column' }}
+      data-cy="page-container"
+    >
+      <BrowserRouter>
+        <Analytics />
+        {/* on page change scroll to top */}
+        <ScrollToTop />
 
-  public render() {
-    const pages = [
-      ...COMMUNITY_PAGES,
-      ...COMMUNITY_PAGES_PROFILE,
-      ...COMMUNITY_PAGES_MORE,
-      ...ADMIN_PAGES,
-    ]
-    // we are rendering different pages and navigation dependent on whether the user has navigated directly to view the
-    // entire site, or just one page of it via subdomains. This is so we can effectively integrate just parts of this
-    // platform into other sites. The first case is direct nav
-    return (
-      <div>
-        {SITE !== 'production' ? <DevTools /> : null}
-        <DevNotice />
-        <BrowserRouter>
-          {/* on page change scroll to top */}
-          <ScrollToTop>
-            <div
-              style={{
-                minHeight: '100vh',
-                maxWidth: '100vw',
-                display: 'flex',
-                overflowY: 'auto',
-                overflowX: 'hidden',
-                flexDirection: 'column',
-              }}
-            >
-              <Switch>
-                {pages.map(page => (
-                  <Route
-                    exact={page.exact}
-                    path={page.path}
-                    key={page.path}
-                    render={props => (
-                      <React.Fragment>
-                        <Header
-                          variant="community"
-                          title={page.title}
-                          description={page.description}
-                        />
-                        <PageContainer>
-                          <>{page.component}</>
-                        </PageContainer>
-                      </React.Fragment>
-                    )}
-                  />
-                ))}
-                <Route component={NotFoundPage} />
-              </Switch>
-              <Switch>
-                <Route
-                  exact
-                  path="/"
-                  render={() => <Redirect to="/how-to" />}
-                />
-              </Switch>
-            </div>
-          </ScrollToTop>
-        </BrowserRouter>
-      </div>
-    )
-  }
+        {/* TODO - add better loading fallback */}
+        <DevSiteHeader />
+        <Alerts />
+        <Header />
+        <Suspense
+          fallback={<div style={{ minHeight: 'calc(100vh - 175px)' }}></div>}
+        >
+          <Routes>
+            {menuItems.map((page) => (
+              <Route
+                path={page.exact ? page.path : `${page.path}/*`}
+                key={page.path}
+                element={
+                  <>
+                    <SeoTagsUpdateComponent title={page.title} />
+                    <Main
+                      data-cy="main-layout-container"
+                      style={{ flex: 1 }}
+                      customStyles={page.customStyles}
+                      ignoreMaxWidth={page.fullPageWidth}
+                    >
+                      <>{page.component}</>
+                    </Main>
+                  </>
+                }
+              />
+            ))}
+            {isModuleSupported(MODULE.QUESTION) ? (
+              <Route
+                path="/questions/*"
+                key="questions"
+                element={
+                  <>
+                    <SeoTagsUpdateComponent title="Question" />
+                    <Main data-cy="main-layout-container" style={{ flex: 1 }}>
+                      <QuestionModuleContainer />
+                    </Main>
+                  </>
+                }
+              />
+            ) : null}
+            <Route index element={<Navigate to="/academy" />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </Suspense>
+
+        <GlobalSiteFooter />
+      </BrowserRouter>
+      <Box
+        sx={{
+          position: 'fixed',
+          bottom: '30px',
+          right: '30px',
+          display: ['none', 'none', 'block'],
+        }}
+      >
+        <ExternalLink href="https://discord.gg/gJ7Yyk4" data-cy="feedback">
+          <Button variant="primary" icon="comment">
+            Join our chat
+          </Button>
+        </ExternalLink>
+      </Box>
+    </Flex>
+  )
 }

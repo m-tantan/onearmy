@@ -1,8 +1,7 @@
 node_modules
 
 ## Compiled JavaScript files
-**/*.js
-**/*.js.map
+dist/
 
 # Typescript v1 declaration files
 types/
@@ -12,3 +11,14 @@ lib/
 .runtimeconfig.json
 
 ./firebase-debug.log
+*.log
+
+!webpack.config.js
+dist
+
+# Emulator data
+data/emulated
+data/exported
+data/seed/*
+!data/seed/.gitkeep
+!data/seed/seed-default.zip

@@ -1,113 +1,280 @@
-import { observable, action } from 'mobx'
-import {
-  IDiscussionComment,
-  IDiscussionPost,
-  IPostFormInput,
-} from 'src/models/discussions.models'
-import { Database, IDBEndpoints } from '../database'
-import { stripSpecialCharacters } from 'src/utils/helpers'
+import { createContext, useContext } from 'react'
+import { cloneDeep } from 'lodash'
+import { action, makeObservable, toJS } from 'mobx'
+import { MAX_COMMENT_LENGTH } from 'src/constants'
+import { logger } from 'src/logger'
+import { getUserCountry } from 'src/utils/getUserCountry'
+import { hasAdminRights, randomID } from 'src/utils/helpers'
+
 import { ModuleStore } from '../common/module.store'
-import { Subscription } from 'rxjs'
+import { getCollectionName, updateDiscussionMetadata } from './discussionEvents'
 
-export class DiscussionsStore extends ModuleStore {
-  private allDiscussionComments$ = new Subscription()
-  @observable
-  public activeDiscussion: IDiscussionPost | undefined
-  @observable
-  public allDiscussionComments: IDiscussionComment[] = []
-  @observable
-  public allDiscussions: IDiscussionPost[]
+import type { IUserPPDB } from 'src/models'
+import type {
+  IDiscussion,
+  IDiscussionComment,
+  IDiscussionSourceModelOptions,
+} from 'src/models/discussion.models'
+import type { DocReference } from '../databaseV2/DocReference'
+import type { IRootStore } from '../RootStore'
 
-  // when initiating, discussions will be fetched via common method in module.store.ts
-  // keep results of allDocs and activeDoc in sync with local varialbes
-  constructor() {
-    super('discussions')
-    this.allDocs$.subscribe(docs => (this.allDiscussions = docs))
-    this.activeDoc$.subscribe(doc => (this.activeDiscussion = doc))
-    this._addCommentsSubscription()
-  }
-  componentDidMount() {}
+const COLLECTION_NAME = 'discussions'
 
-  @action
-  public async setActiveDiscussion(slug: string) {
-    this.setActiveDoc('slug', slug)
+export class DiscussionStore extends ModuleStore {
+  constructor(rootStore: IRootStore) {
+    super(rootStore, COLLECTION_NAME)
+    makeObservable(this)
+    super.init()
   }
 
   @action
-  public createComment(
-    discussionID: string,
-    comment: string,
-    repliesToId?: string,
-  ) {
-    // cast endpoing to IDB endpoints as no way in typescript ot handle regex for subcollection path
-    const endpoint = `discussions/${discussionID}/comments` as IDBEndpoints
-    const values: IDiscussionComment = {
-      ...Database.generateDocMeta(endpoint),
-      comment,
-      _discussionID: discussionID,
-      replies: [],
-      repliesTo: repliesToId ? repliesToId : discussionID,
-      type: 'discussionComment',
+  public async fetchOrCreateDiscussionBySource(
+    sourceId: string,
+    sourceType: IDiscussion['sourceType'],
+  ): Promise<IDiscussion | null> {
+    const foundDiscussion =
+      toJS(
+        await this.db
+          .collection<IDiscussion>(COLLECTION_NAME)
+          .getWhere('sourceId', '==', sourceId),
+      )[0] || null
+
+    if (foundDiscussion) {
+      return foundDiscussion
     }
-    return Database.setDoc(
-      `discussions/${discussionID}/comments/${values._id}`,
-      values,
-    )
+
+    // Create a new discussion
+    return (await this.uploadDiscussion(sourceId, sourceType)) || null
+  }
+
+  public async uploadDiscussion(
+    sourceId: string,
+    sourceType: IDiscussion['sourceType'],
+  ): Promise<IDiscussion | undefined> {
+    const newDiscussion: IDiscussion = {
+      _id: randomID(),
+      sourceId,
+      sourceType,
+      comments: [],
+    }
+
+    const dbRef = await this.db
+      .collection<IDiscussion>(COLLECTION_NAME)
+      .doc(newDiscussion._id)
+
+    return this._updateDiscussion(dbRef, newDiscussion)
   }
 
   @action
-  public async deleteDiscussion(discussion: IDiscussionPost) {
-    return Database.deleteDoc(`discussions/${discussion._id}`)
-  }
+  public async addComment(
+    discussion: IDiscussion,
+    text: string,
+    commentId?: string,
+  ): Promise<IDiscussion | undefined> {
+    try {
+      const user = this.activeUser
+      const comment = text.slice(0, MAX_COMMENT_LENGTH).trim()
 
-  @action
-  public async saveDiscussion(discussion: IDiscussionPost | IPostFormInput) {
-    // differentiate between creating a new discussion and saving an old discussion
-    let d: IDiscussionPost
-    if (discussion.hasOwnProperty('_id')) {
-      d = discussion as IDiscussionPost
-      await Database.setDoc(`discussions/${d._id}`, d)
-    } else {
-      d = await this._createNewDiscussion(discussion as IPostFormInput)
-      await Database.setDoc(`discussions/${d._id}`, d)
-    }
-    // after creation want to return so slug or id can be used for navigation etc.
-    return d
-  }
+      if (user && comment) {
+        const dbRef = this.db
+          .collection<IDiscussion>(COLLECTION_NAME)
+          .doc(discussion._id)
 
-  private async _createNewDiscussion(values: IPostFormInput) {
-    console.log('adding discussion', values)
-    const discussion: IDiscussionPost = {
-      ...Database.generateDocMeta('discussions'),
-      _commentCount: 0,
-      _last3Comments: [],
-      _lastResponse: null,
-      _usefulCount: 0,
-      _viewCount: 0,
-      content: values.content,
-      isClosed: false,
-      slug: stripSpecialCharacters(values.title),
-      tags: values.tags,
-      title: values.title,
-      type: 'discussionQuestion',
-    }
-    await Database.checkSlugUnique('discussions', discussion.slug)
-    return discussion
-  }
+        const currentDiscussion = toJS(await dbRef.get())
 
-  // want to add an additional listener so that when the active discussion changes
-  // any comments are also loaded from subcollection
-  private _addCommentsSubscription() {
-    this.allDiscussionComments$.unsubscribe()
-    this.activeDoc$.subscribe(doc => {
-      if (doc) {
-        const endpoint = `discussions/${doc._id}/comments` as IDBEndpoints
-        this.allDiscussionComments$ = Database.getCollection(
-          endpoint,
-        ).subscribe(docs => {
-          this.allDiscussionComments = docs
-        })
+        if (!currentDiscussion) {
+          throw new Error('Discussion not found')
+        }
+
+        const newComment: IDiscussionComment = {
+          _id: randomID(),
+          _created: new Date().toISOString(),
+          _creatorId: user._id,
+          creatorName: user.userName,
+          creatorCountry: getUserCountry(user),
+          text: comment,
+          parentCommentId: commentId || null,
+        }
+
+        currentDiscussion.comments.push(newComment)
+
+        await this._addNotification(newComment, currentDiscussion)
+
+        return this._updateDiscussion(dbRef, currentDiscussion)
       }
+    } catch (err) {
+      logger.error(err)
+      throw new Error(err?.message)
+    }
+  }
+
+  @action
+  public async editComment(
+    discussion: IDiscussion,
+    commentId: string,
+    text: string,
+  ): Promise<IDiscussion | undefined> {
+    try {
+      const user = this.activeUser
+      const comment = text.slice(0, MAX_COMMENT_LENGTH).trim()
+
+      if (user && comment) {
+        const dbRef = this.db
+          .collection<IDiscussion>(COLLECTION_NAME)
+          .doc(discussion._id)
+
+        const currentDiscussion = toJS(await dbRef.get())
+
+        if (currentDiscussion) {
+          const targetComment = currentDiscussion.comments.find(
+            (comment) => comment._id === commentId,
+          )
+
+          if (targetComment?._creatorId !== user._id && !hasAdminRights(user)) {
+            logger.error('Comment not editable by user', { user })
+            throw new Error('Comment not editable by user')
+          }
+
+          currentDiscussion.comments = this._findAndUpdateComment(
+            user,
+            currentDiscussion.comments,
+            text,
+            commentId,
+          )
+
+          return this._updateDiscussion(dbRef, currentDiscussion)
+        }
+      }
+    } catch (err) {
+      logger.error(err)
+      throw new Error(err?.message)
+    }
+  }
+
+  @action
+  public async deleteComment(
+    discussion: IDiscussion,
+    commentId: string,
+  ): Promise<IDiscussion | undefined> {
+    try {
+      const user = this.activeUser
+
+      if (user) {
+        const dbRef = this.db
+          .collection<IDiscussion>(COLLECTION_NAME)
+          .doc(discussion._id)
+
+        const currentDiscussion = toJS(await dbRef.get())
+
+        if (currentDiscussion) {
+          const targetComment = currentDiscussion.comments.find(
+            (comment) => comment._id === commentId,
+          )
+
+          if (targetComment?._creatorId !== user._id && !hasAdminRights(user)) {
+            logger.error('Comment can not be deleted by user', { user })
+            throw new Error('Comment not editable by user')
+          }
+
+          currentDiscussion.comments = this._findAndDeleteComment(
+            user,
+            currentDiscussion.comments,
+            commentId,
+          )
+
+          return this._updateDiscussion(dbRef, currentDiscussion)
+        }
+      }
+    } catch (err) {
+      logger.error(err)
+      throw new Error(err?.message)
+    }
+  }
+
+  private async _addNotification(
+    comment: IDiscussionComment,
+    discussion: IDiscussion,
+  ) {
+    const collectionName = getCollectionName(discussion.sourceType)
+    if (!collectionName) {
+      return logger.trace(
+        `Unable to find collection. Discussion notification not sent. sourceType: ${discussion.sourceType}`,
+      )
+    }
+
+    const dbRef = this.db
+      .collection<IDiscussionSourceModelOptions>(collectionName)
+      .doc(discussion.sourceId)
+    const parentContent = toJS(await dbRef.get())
+    const parentComment = discussion.comments.find(
+      ({ _id }) => _id === comment.parentCommentId,
+    )
+
+    if (parentContent) {
+      const username = !parentComment
+        ? parentContent._createdBy
+        : parentComment.creatorName
+
+      const _id = !parentComment ? comment._id : parentComment._id
+
+      return this.userNotificationsStore.triggerNotification(
+        'new_comment_discussion',
+        username,
+        `/${collectionName}/${parentContent.slug}#comment:${_id}`,
+        parentContent.title,
+      )
+    }
+  }
+
+  private _findAndUpdateComment(
+    user: IUserPPDB,
+    comments: IDiscussionComment[],
+    newCommentText: string,
+    commentId: string,
+  ) {
+    return comments.map((comment) => {
+      if (
+        (comment._creatorId === user._id || hasAdminRights(user)) &&
+        comment._id == commentId
+      ) {
+        comment.text = newCommentText
+        comment._edited = new Date().toISOString()
+      }
+      return comment
+    })
+  }
+
+  private async _updateDiscussion(
+    dbRef: DocReference<IDiscussion>,
+    discussion: IDiscussion,
+  ) {
+    await dbRef.set({ ...cloneDeep(discussion) })
+
+    updateDiscussionMetadata(this.db, discussion)
+
+    return toJS(dbRef.get())
+  }
+
+  private _findAndDeleteComment(
+    user: IUserPPDB,
+    comments: IDiscussionComment[],
+    commentId: string,
+  ) {
+    return comments.filter((comment) => {
+      return !(
+        (comment._creatorId === user._id || hasAdminRights(user)) &&
+        comment._id === commentId
+      )
     })
   }
 }
+
+/**
+ * Export an empty context object to be shared with components
+ * The context will be populated with the DiscussionStore in the module index
+ * (avoids cyclic deps and ensure shared module ready)
+ */
+export const DiscussionStoreContext = createContext<DiscussionStore>(
+  null as any,
+)
+export const useDiscussionStore = () => useContext(DiscussionStoreContext)

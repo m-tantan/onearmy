@@ -1,32 +1,93 @@
-import React from 'react'
-import Linkify from 'react-linkify'
-import { IHowtoStep } from 'src/models/howto.models'
-import { Box, Image } from 'rebass'
-import Heading from 'src/components/Heading'
-import Text from 'src/components/Text'
-import { IUploadedFileMeta } from 'src/stores/storage'
-import ImageGallery from './ImageGallery'
+import styled from '@emotion/styled'
+import { ImageGallery, LinkifyText, VideoPlayer } from 'oa-components'
+import { formatImagesForGallery } from 'src/utils/formatImageListForGallery'
+import { capitalizeFirstLetter } from 'src/utils/helpers'
+import { Box, Card, Flex, Heading, Text } from 'theme-ui'
+
+import type { IHowtoStep } from 'src/models/howto.models'
 
 interface IProps {
   step: IHowtoStep
   stepindex: number
 }
 
-export default class Step extends React.PureComponent<IProps> {
-  render() {
-    return (
-      <Box pt={5} id={this.props.step.title}>
-        <Heading bold large>
-          Step {this.props.stepindex + 1}:&nbsp;
-          <Heading inline large regular>
-            {this.props.step.title}
-          </Heading>
-        </Heading>
-        <Text regular preLine my={4}>
-          <Linkify>{this.props.step.text}</Linkify>
-        </Text>
-        <ImageGallery images={this.props.step.images as IUploadedFileMeta[]} />
-      </Box>
-    )
-  }
+const FlexStepNumber = styled(Flex)`
+  height: fit-content;
+`
+
+const Step = (props: IProps) => {
+  const { stepindex, step } = props
+  return (
+    <>
+      <Flex
+        data-cy={`step_${stepindex}`}
+        mx={[0, 0, -2]}
+        mt={9}
+        sx={{ flexDirection: ['column', 'column', 'row'] }}
+      >
+        <Flex mx={[0, 0, 2]} sx={{ flex: 1, width: '100%' }} mb={[3, 3, 0]}>
+          <FlexStepNumber sx={{ justifyContent: 'center', width: '100%' }}>
+            <Card sx={{ width: '100%', textAlign: 'center' }} py={3} px={4}>
+              <Heading mb={0}>{stepindex + 1}</Heading>
+            </Card>
+          </FlexStepNumber>
+        </Flex>
+        <Flex
+          mx={[0, 0, 2]}
+          sx={{
+            flex: 9,
+            flexDirection: ['column', 'column', 'row'],
+            overflow: 'hidden',
+          }}
+        >
+          <Card sx={{ width: '100%' }}>
+            <Flex
+              sx={{
+                flexDirection: ['column-reverse', 'column-reverse', 'row'],
+              }}
+            >
+              <Flex
+                py={4}
+                px={4}
+                sx={{
+                  width: ['100%', '100%', `${(1 / 2) * 100}%`],
+                  flexDirection: 'column',
+                }}
+              >
+                <Heading mb={0}>
+                  {/* HACK 2021-07-16 - new howtos auto capitalize title but not older */}
+                  {step.title && capitalizeFirstLetter(step.title)}
+                </Heading>
+                <Box>
+                  <Text
+                    mt={3}
+                    color={'grey'}
+                    variant="paragraph"
+                    sx={{
+                      wordBreak: 'break-word',
+                      whiteSpace: 'pre-line',
+                    }}
+                  >
+                    <LinkifyText>
+                      {/* HACK 2021-07-16 - new howtos auto capitalize title but not older */}
+                      {step.text && capitalizeFirstLetter(step.text)}
+                    </LinkifyText>
+                  </Text>
+                </Box>
+              </Flex>
+              <Box sx={{ width: ['100%', '100%', `${(1 / 2) * 100}%`] }}>
+                {step.videoUrl ? (
+                  <VideoPlayer videoUrl={step.videoUrl} />
+                ) : step.images ? (
+                  <ImageGallery images={formatImagesForGallery(step.images)} />
+                ) : null}
+              </Box>
+            </Flex>
+          </Card>
+        </Flex>
+      </Flex>
+    </>
+  )
 }
+
+export default Step
